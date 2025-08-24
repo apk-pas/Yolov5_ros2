@@ -19,10 +19,11 @@ setup(
     ],
     install_requires=['setuptools'],
     zip_safe=True,
-    maintainer='fishros',
-    maintainer_email='fishros@foxmail.com',
-    description='TODO: Package description',
-    license='TODO: License declaration',
+    maintainer='apk',
+    maintainer_email='1991170159@qq.com',
+    description='yolov5 with ros2',
+    license='MIT',
+    tests_require=['pytest'],
     entry_points={
         'console_scripts': [
             "yolo_detect_2d=yolov5_ros2.yolo_detect_2d:main"
