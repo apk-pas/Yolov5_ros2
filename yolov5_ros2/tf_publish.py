@@ -6,11 +6,10 @@ from geometry_msgs.msg import TransformStamped
 
 class TfPublisher(Node):
     def __init__(self):
-        super().__init__('tf_publisher')
+        super().__init__('tf_publish')
         
         # 参数
-        self.declare_parameter("base_frame", "base_link", 
-            description="基础坐标系")
+        self.declare_parameter("base_frame", "base_link", description="base link")
         self.base_frame = self.get_parameter('base_frame').value
 
         # TF广播器
@@ -20,7 +19,7 @@ class TfPublisher(Node):
         self.detection_sub = self.create_subscription(
             Detection2DArray, "detections", self.detection_callback, 10)
 
-        self.get_logger().info(f"TF发布器已启动，基础坐标系: {self.base_frame}")
+        self.get_logger().info(f"pubish tf: {self.base_frame}")
 
     def detection_callback(self, msg: Detection2DArray):
         """将检测结果转换为TF发布"""

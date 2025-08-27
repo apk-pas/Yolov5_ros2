@@ -11,11 +11,11 @@ def generate_launch_description():
         # 图像处理节点
         Node(
             package='yolov5_ros2',
-            executable='image_processor',
-            name='image_processor',
+            executable='yolo_detect',
+            name='yolo_detect',
             output='screen',
             parameters=[{
-                'device': 'cuda',  # 可改为'cpu'
+                'device': 'cpu',  # 可改为'cpu'
                 'image_topic': '/image_raw',
                 'camera_info_file': camera_info_path,
                 'show_result': False,
@@ -25,8 +25,8 @@ def generate_launch_description():
         # TF发布节点
         Node(
             package='yolov5_ros2',
-            executable='tf_publisher',
-            name='tf_publisher',
+            executable='tf_publish',
+            name='tf_publish',
             output='screen',
             parameters=[{
                 'base_frame': 'base_link'

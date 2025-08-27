@@ -21,8 +21,7 @@ package_share_directory = get_package_share_directory('yolov5_ros2')
 # 创建ROS 2节点类YoloDetectorNode
 class YoloDetectorNode(Node):
     def __init__(self):
-        super().__init__('yolo_detector_node')
-        self.get_logger().info(f"当前ROS 2发行版: {ros_distribution}")
+        super().__init__('yolo_detect')
 
         # 声明ROS参数
         self.declare_parameter("device", "cuda", ParameterDescriptor(
