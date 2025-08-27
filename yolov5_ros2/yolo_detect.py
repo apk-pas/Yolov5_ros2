@@ -1,3 +1,7 @@
+from math import frexp
+from traceback import print_tb
+from torch import imag
+from yolov5 import YOLOv5
 import rclpy
 from rclpy.node import Node
 from ament_index_python.packages import get_package_share_directory
@@ -7,153 +11,162 @@ from sensor_msgs.msg import Image, CameraInfo
 from cv_bridge import CvBridge
 import cv2
 import yaml
+from yolov5_ros2.cv_tool import px2xy
 import os
-import numpy as np
-from yolov5 import YOLOv5
 
-class ImageProcessor(Node):
+# 获取ROS发行版版本并设置YoloV5配置文件的共享目录
+ros_distribution = os.environ.get("ROS_DISTRO")
+package_share_directory = get_package_share_directory('yolov5_ros2')
+
+# 创建ROS 2节点类YoloDetectorNode
+class YoloDetectorNode(Node):
     def __init__(self):
-        super().__init__('image_processor')
-        
-        # 参数声明
+        super().__init__('yolo_detector_node')
+        self.get_logger().info(f"当前ROS 2发行版: {ros_distribution}")
+
+        # 声明ROS参数
         self.declare_parameter("device", "cuda", ParameterDescriptor(
-            name="device", description="计算设备: cpu/cuda:0"))
+            name="device", description="计算设备选择，默认: cpu,可选: cuda:0"))
+
+        self.declare_parameter("model", "yolov5s", ParameterDescriptor(
+            name="model", description="默认模型选择: yolov5s"))
+
         self.declare_parameter("image_topic", "/image_raw", ParameterDescriptor(
-            name="image_topic", description="图像话题"))
+            name="image_topic", description="图像话题，默认: /image_raw"))
+        
         self.declare_parameter("camera_info_topic", "/camera/camera_info", ParameterDescriptor(
-            name="camera_info_topic", description="相机信息话题"))
-        self.declare_parameter("camera_info_file", 
-            f"{get_package_share_directory('yolov5_ros2')}/config/camera_info.yaml",
-            ParameterDescriptor(name="camera_info_file", description="相机参数文件路径"))
-        self.declare_parameter("show_result", False)
-        self.declare_parameter("pub_result_img", False)
+            name="camera_info_topic", description="相机信息话题，默认: /camera/camera_info"))
 
-        # 加载模型
-        model_path = os.path.join(
-            get_package_share_directory('yolov5_ros2'), "config", "best.pt")
-        self.yolov5 = YOLOv5(model_path, self.get_parameter('device').value)
+        # 从camera_info话题读取参数（如果可用），否则使用文件定义的参数
+        self.declare_parameter("camera_info_file", f"{package_share_directory}/config/camera_info.yaml", ParameterDescriptor(
+            name="camera_info", description=f"相机信息文件路径，默认: {package_share_directory}/config/camera_info.yaml"))
 
-        # 相机参数
-        self.camera_info = self._load_camera_info()
-        self.camera_frame = "camera"
+        # 默认不显示检测结果
+        self.declare_parameter("show_result", False, ParameterDescriptor(
+            name="show_result", description="是否显示检测结果，默认: False"))
 
-        # 发布器
-        self.detection_pub = self.create_publisher(Detection2DArray, "detections", 10)
-        self.result_img_pub = self.create_publisher(Image, "result_img", 10)
+        # 默认不发布检测结果图像
+        self.declare_parameter("pub_result_img", False, ParameterDescriptor(
+            name="pub_result_img", description="是否发布检测结果图像，默认: False"))
 
-        # 订阅器
+        # 1. 加载模型
+        model_path = package_share_directory + "/config/" + "best.pt"
+        device = self.get_parameter('device').value
+        self.yolov5 = YOLOv5(model_path=model_path, device=device)
+
+        # 2. 创建发布器
+        self.detection_pub = self.create_publisher(
+            Detection2DArray, "detection_results", 10)
+        self.detection_msg = Detection2DArray()
+
+        self.result_img_pub = self.create_publisher(Image, "detection_image", 10)
+
+        # 3. 创建图像订阅器（3D相机订阅深度信息，2D相机加载相机信息）
+        image_topic = self.get_parameter('image_topic').value
         self.image_sub = self.create_subscription(
-            Image, self.get_parameter('image_topic').value, 
-            self.image_callback, 10)
-        self.camera_info_sub = self.create_subscription(
-            CameraInfo, self.get_parameter('camera_info_topic').value,
-            self.camera_info_callback, 1)
+            Image, image_topic, self.process_image, 10)
 
-        # 工具
+        camera_info_topic = self.get_parameter('camera_info_topic').value
+        self.camera_info_sub = self.create_subscription(
+            CameraInfo, camera_info_topic, self.update_camera_info, 1)
+
+        # 获取相机信息
+        with open(self.get_parameter('camera_info_file').value) as f:
+            self.camera_info = yaml.full_load(f.read())
+            self.get_logger().info(f"默认相机参数: {self.camera_info['k']} \n {self.camera_info['d']}")
+
+        # 4. 图像格式转换（使用cv_bridge）
         self.bridge = CvBridge()
         self.show_result = self.get_parameter('show_result').value
         self.pub_result_img = self.get_parameter('pub_result_img').value
-        self.ros_distribution = os.environ.get("ROS_DISTRO", "humble")
 
-    def _load_camera_info(self):
-        """从文件加载默认相机参数"""
-        with open(self.get_parameter('camera_info_file').value, 'r') as f:
-            return yaml.full_load(f.read())
+    def update_camera_info(self, msg: CameraInfo):
+        """
+        通过回调函数获取相机参数
+        """
+        self.camera_info['k'] = msg.k
+        self.camera_info['p'] = msg.p
+        self.camera_info['d'] = msg.d
+        self.camera_info['r'] = msg.r
+        self.camera_info['roi'] = msg.roi
 
-    def camera_info_callback(self, msg: CameraInfo):
-        """从话题更新相机参数"""
-        self.camera_info.update({
-            'k': msg.k,
-            'd': msg.d,
-            'r': msg.r,
-            'p': msg.p
-        })
-        self.get_logger().info("已从话题更新相机参数")
-        self.camera_info_sub.destroy()  # 只需要一次更新
+        self.camera_info_sub.destroy()  # 只需要更新一次
 
-    def px2xy(self, point, camera_k, camera_d, z=1.0):
-        """像素坐标转相机坐标（内置方法，替代cv_tool）"""
-        MK = np.array(camera_k, dtype=float).reshape(3, 3)
-        MD = np.array(camera_d, dtype=float)
-        point = np.array(point, dtype=float).reshape(1, 1, 2)
-        undistorted = cv2.undistortPoints(point, MK, MD, P=MK)
-        return (undistorted[0][0] * z).tolist()
+    def process_image(self, msg: Image):
+        # 5. 检测并发布结果
+        image = self.bridge.imgmsg_to_cv2(msg)
+        detection_result = self.yolov5.predict(image)
+        self.get_logger().info(str(detection_result))
 
-    def image_callback(self, msg: Image):
-        """处理图像并发布检测结果"""
-        try:
-            image = self.bridge.imgmsg_to_cv2(msg)
-            detect_result = self.yolov5.predict(image)
-            detection_array = Detection2DArray()
-            detection_array.header = msg.header
-            detection_array.header.frame_id = self.camera_frame
+        self.detection_msg.detections.clear()
+        self.detection_msg.header.frame_id = "camera"
+        self.detection_msg.header.stamp = self.get_clock().now().to_msg()
 
-            # 解析检测结果
-            predictions = detect_result.pred[0]
-            boxes = predictions[:, :4]
-            scores = predictions[:, 4]
-            categories = predictions[:, 5]
+        # 解析结果
+        predictions = detection_result.pred[0]
+        boxes = predictions[:, :4]  # x1, y1, x2, y2
+        scores = predictions[:, 4]
+        categories = predictions[:, 5]
 
-            for idx in range(len(categories)):
-                cls_name = detect_result.names[int(categories[idx])]
-                x1, y1, x2, y2 = map(int, boxes[idx])
-                center_x = (x1 + x2) / 2.0
-                center_y = (y1 + y2) / 2.0
+        for index in range(len(categories)):
+            class_name = detection_result.names[int(categories[index])]
+            detection_2d = Detection2D()
+            detection_2d.id = class_name
+            x1, y1, x2, y2 = boxes[index]
+            x1 = int(x1)
+            y1 = int(y1)
+            x2 = int(x2)
+            y2 = int(y2)
+            center_x = (x1 + x2) / 2.0
+            center_y = (y1 + y2) / 2.0
 
-                # 转换为相机坐标系
-                world_x, world_y = self.px2xy(
-                    [center_x, center_y], 
-                    self.camera_info["k"], 
-                    self.camera_info["d"], 
-                    z=1.0  # 假设深度为1米
-                )
+            if ros_distribution == 'galactic':
+                detection_2d.bbox.center.x = center_x
+                detection_2d.bbox.center.y = center_y
+            else:
+                detection_2d.bbox.center.position.x = center_x
+                detection_2d.bbox.center.position.y = center_y
 
-                # 创建检测消息
-                detection = Detection2D()
-                detection.id = f"{cls_name}_{idx}"
-                if self.ros_distribution == 'galactic':
-                    detection.bbox.center.x = center_x
-                    detection.bbox.center.y = center_y
-                else:
-                    detection.bbox.center.position.x = center_x
-                    detection.bbox.center.position.y = center_y
-                detection.bbox.size_x = x2 - x1
-                detection.bbox.size_y = y2 - y1
+            detection_2d.bbox.size_x = float(x2 - x1)
+            detection_2d.bbox.size_y = float(y2 - y1)
 
-                # 添加位姿假设
-                hypothesis = ObjectHypothesisWithPose()
-                hypothesis.hypothesis.class_id = cls_name
-                hypothesis.hypothesis.score = float(scores[idx])
-                hypothesis.pose.pose.position.x = world_x
-                hypothesis.pose.pose.position.y = world_y
-                detection.results.append(hypothesis)
-                detection_array.detections.append(detection)
+            obj_hypothesis = ObjectHypothesisWithPose()
+            obj_hypothesis.hypothesis.class_id = class_name
+            obj_hypothesis.hypothesis.score = float(scores[index])
 
-                # 绘制检测框
-                if self.show_result or self.pub_result_img:
-                    cv2.rectangle(image, (x1, y1), (x2, y2), (0, 255, 0), 2)
-                    cv2.putText(image, f"{cls_name}: {scores[idx]:.2f}", 
-                                (x1, y1-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+            # 像素坐标转相机坐标
+            world_x, world_y = px2xy(
+                [center_x, center_y], self.camera_info["k"], self.camera_info["d"], 1)
+            obj_hypothesis.pose.pose.position.x = world_x
+            obj_hypothesis.pose.pose.position.y = world_y
+            detection_2d.results.append(obj_hypothesis)
+            self.detection_msg.detections.append(detection_2d)
 
-            # 发布结果
-            self.detection_pub.publish(detection_array)
-
-            # 显示/发布结果图像
-            if self.show_result:
-                cv2.imshow("Detection Result", image)
+            # 绘制结果
+            if self.show_result or self.pub_result_img:
+                cv2.rectangle(image, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                cv2.putText(image, f"{class_name}({world_x:.2f},{world_y:.2f})", (x1, y1),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
                 cv2.waitKey(1)
-            if self.pub_result_img:
-                self.result_img_pub.publish(self.bridge.cv2_to_imgmsg(image, "bgr8"))
 
-        except Exception as e:
-            self.get_logger().error(f"图像处理错误: {str(e)}")
+        # 显示结果（如果需要）
+        if self.show_result:
+            cv2.imshow('detection_result', image)
+            cv2.waitKey(1)
 
-def main(args=None):
-    rclpy.init(args=args)
-    node = ImageProcessor()
-    rclpy.spin(node)
-    node.destroy_node()
+        # 发布结果图像（如果需要）
+        if self.pub_result_img:
+            result_img_msg = self.bridge.cv2_to_imgmsg(image, encoding="bgr8")
+            result_img_msg.header = msg.header
+            self.result_img_pub.publish(result_img_msg)
+
+        if len(categories) > 0:
+            self.detection_pub.publish(self.detection_msg)
+
+def main():
+    rclpy.init()
+    rclpy.spin(YoloDetectorNode())
     rclpy.shutdown()
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

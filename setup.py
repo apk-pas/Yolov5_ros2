@@ -26,7 +26,7 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-            "yolo_detect_2d=yolov5_ros2.yolo_detect_2d:main"
+            "yolo_detect=yolov5_ros2.yolo_detect:main"
         ],
     },
 )
