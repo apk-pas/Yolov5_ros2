@@ -15,11 +15,9 @@ def generate_launch_description():
             name='yolo_detect',
             output='screen',
             parameters=[{
-                'device': 'cpu',  # 可改为'cpu'
+                'device': 'cpu', 
                 'image_topic': '/image_raw',
                 'camera_info_file': camera_info_path,
-                'show_result': False,
-                'pub_result_img': True
             }]
         ),
         # TF发布节点
