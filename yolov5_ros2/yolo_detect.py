@@ -17,7 +17,7 @@ class YoloV5Ros2(Node):
     def __init__(self):
         super().__init__('yolov5_ros2')
 
-        # 声明核心参数
+        # 声明参数
         self.declare_parameter("device", "cpu")
         self.declare_parameter("image_topic", "/image_raw")
         self.declare_parameter("camera_info_file", f"{package_share_directory}/config/camera_info.yaml")
@@ -115,7 +115,7 @@ class YoloV5Ros2(Node):
                 world_x, world_y, world_z = tvec.flatten()
             else:
                 world_x, world_y, world_z = 0.0, 0.0, 0.0
-                self.get_logger().warn(f"PNP failed for {class_name}")
+                self.get_logger().warn(f"PNP failed for {class_name}") # PNP解析失败则发出warning
             
             hypothesis.pose.pose.position.x = world_x
             hypothesis.pose.pose.position.y = world_y

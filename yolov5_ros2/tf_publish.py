@@ -2,18 +2,16 @@ import rclpy
 from rclpy.node import Node
 from vision_msgs.msg import Detection2DArray
 import tf2_ros
-from tf2_ros import StaticTransformBroadcaster  # 新增静态TF发布器
 from geometry_msgs.msg import TransformStamped
 
 class TfPublisher(Node):
     def __init__(self):
-        super().__init__('tf_publish')  # 保持节点名称不变
+        super().__init__('tf_publish')
         
-        # 参数声明（保持原始参数名）
         self.declare_parameter("base_frame", "base_link")
         self.base_frame = self.get_parameter('base_frame').value
         
-        # 动态TF发布器（camera_frame -> 检测物体）
+        # 动态TF发布器
         self.tf_broadcaster = tf2_ros.TransformBroadcaster(self)
 
         # 订阅检测结果
@@ -25,10 +23,10 @@ class TfPublisher(Node):
         camera_frame = msg.header.frame_id
         transform = TransformStamped()
         transform.header.stamp = msg.header.stamp
-        transform.header.frame_id = self.base_frame  # 使用参数中的base_frame
+        transform.header.frame_id = self.base_frame
         transform.child_frame_id = camera_frame
         
-        # 相机相对base_link的固定位置（保持原始参数名和值）
+        # 相机相对base_link的固定位置
         self.x = 0.1
         self.y = 0.0
         self.z = 0.1
